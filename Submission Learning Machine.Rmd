@@ -1,0 +1,142 @@
+---
+title: "Learning Machine Application in Human Activity Recognition example"
+author: "Maria Ines Plaza Schwarck"
+date: "December 11, 2015"
+output: html_document
+---
+
+#Executive Summary
+The following report explains the Learning Machine established for the Weight Lifting Exercises dataset in order to provide feedback in the future about the correct execution of the exercise and avoid possible injuries due to improper movements (variables) during the exercise. 
+
+The dataset were transformed and several approaches were took to estimate the best fit Learning Machine Model. After cross-validation and test the best model was: **Random Forest.** 
+
+#Experiment and Data Source Explanation
+The dataset used in the Learning Machine Algorythm is provided by [Groupware](http://groupware.les.inf.puc-rio.br/as) as part of the Human Activity Recognition (HAR) research area. This specific dataset focus on the Weight Lifting Exercises and its correct execution and could be found directly: [Training Set](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) and [Test Set](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv).  
+
+The detailed experiment is explained in the [paper](http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf) written by the authors, but a summary is going to be presented to understand the analysis and results obtained from the learning machine algorythm. 
+
+##Scope and future use
+In HAR there are several researchs related to identify different activities, nonetheless the quality or how well of a movement is normally not studied. This experiment was designed with focus on determining wheter a movement during weight lifting was well performed or not.This experiment (and its subsequence Learning Machine) could provide specific feedback to people that trains with weight lifting in order to prevent future injuries due to incorrect movement during the exercise. 
+
+##Design of the experiment
+
+According to the [paper](http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf), Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions. Each fashion is stored in the variable Class, Class A represents the correct execution of the exercise while the other represents common mistakes in weight lifting exercises. 
+
+#Learning Machine
+
+##Set-Up
+
+```{r}
+#Check if the required packaged are installed and upload them. 
+    list.of.packages <- c("rpart","caret","lattice","randomForest")
+    new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+    if(length(new.packages)) install.packages(new.packages)
+    library(lattice);library(caret); library(rpart); library(randomForest)
+#Fix Seed for Reproducibility    
+    set.seed(522016)
+```   
+
+##Reading and Preparing Data
+
+```{r}
+#Reading Data from Internet source. 
+    urlTraining <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+    urlTest <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+    Data_Training <- read.csv(url(urlTraining), sep=",", header=T)
+    Data_Test <- read.csv(url(urlTest), sep=",", header=T)
+#Split Training data in two: 1.- To train the model, 2.- To cross-validate before using the test data. 
+    Partion <- createDataPartition(y=Data_Training$classe, p=0.7, list=FALSE)    
+    Data_Model <- Data_Training[Partion, ]
+    Data_CV <- Data_Training[-Partion, ]
+```
+
+##Transform Data
+
+Several Data Transformations were made in order to clean and prepare the data for the learning machine Algorithm. The following transformations were performed: 
+
+N |Transformation | Reason | # Remove Columns | Variables after transformation
+---|----|---|---|----
+1 |Remove unnecesary Columns | The first 5 columns correspond to date, time, name and number of record, that are by definition not relevant for the model | 5 | 155
+2 |Remove columns with more than 60% of NA or empty value | These fields do not have enought relevant information to be good estimators | 67 | 88
+3 |Remove variables with Variance near to zero | Variance near to zero means low significancy for the final results | 34 | 54 
+4 |Standarization | To avoide noise due to different scales and huge concentration around a specific point | 0 | 54
+
+
+```{r}
+#Data Transformation
+    #Removing first columns since they are irrelevant for the algorythm. 
+        Data_Model <- Data_Model[c(-(1:5))]
+    #Removing columns with more than 60% of NA or empty value
+        NDataCol <- ncol(Data_Model)
+        Logical_Vector_Cols <- TRUE
+        for (i in 2: NDataCol) {
+            Check <- sum(is.na(Data_Model[,i]))/nrow(Data_Model)
+            Logical_Vector_Cols <- c(Logical_Vector_Cols, Check<0.6)
+        }
+        Data_Model <- subset(Data_Model,select=Logical_Vector_Cols)
+    #Removing variables with Variance near to zero
+        Logic_Vector_NZV <- nearZeroVar(Data_Model, saveMetrics=TRUE)
+        Data_Model <- subset(Data_Model,select=!(Logic_Vector_NZV$nzv))
+    #Standardizing Numeric Data
+        NDataCol <- ncol(Data_Model)
+        Standard_Data <- matrix(, nrow = 2, ncol = NDataCol)
+        for (i in 1: NDataCol) {
+            if(is.numeric(Data_Model[,i])){
+                Standard_Data[1,i] <- mean(Data_Model[,i])
+                Standard_Data[2,i] <- sd(Data_Model[,i])
+                Data_Model[,i]<- (Data_Model[,i]-mean(Data_Model[,i]))/sd(Data_Model[,i])
+            }
+            else
+            {
+                Standard_Data[1,i] <- 0 
+                Standard_Data[2,i] <- 0
+            }
+        }
+        colnames(Standard_Data) <- names(Data_Model)
+        rownames(Standard_Data) <- c("mean","sd")
+```
+
+The same transformations should be applied to the Cross Validation and Test Data. It is important to note that the Standarization should be done with the mean and standard deviation of the Data Model. This information was stored in the matrix: Standard Data. 
+
+```{r}
+#Applying the same transformations to Data for Cross-Validation
+        Data_CV <- subset(Data_CV,select=names(Data_Model))
+        #Standardizing Numeric Data
+        for (i in 1: NDataCol) {
+            if(is.numeric(Data_CV[,i])){
+                Data_CV[,i]<- (Data_CV[,i]-Standard_Data[1,i])/Standard_Data[2,i]
+            }
+        }
+    #Applying the same transformations to Data for Test Model
+        Data_Test <- subset(Data_Test,select=names(Data_Model)[1:53])
+        #Standardizing Numeric Data
+        for (i in 1: NDataCol-1) {
+            if(is.numeric(Data_Test[,i])){
+                Data_Test[,i]<- (Data_Test[,i]-Standard_Data[1,i])/Standard_Data[2,i]
+            }
+        }
+```
+
+##Train Machine Learning
+After pre-processing the data, the Data_Model is used to train two learning machines: 
+1. Decssion Tree
+2. Random Forest
+
+After training both models and for validation purporses, new values are predicted using the Data for Cross-Validation (Data_CV)
+
+```{r}
+    Model_Decission_Tree <- rpart(classe ~ ., data=Data_Model, method="class")
+    Model_Random_Forest <- randomForest(classe ~. , data=Data_Model)
+    Pred_DT <- predict(Model_Decission_Tree, Data_CV, type="class")
+    Pred_RF <- predict(Model_Random_Forest, Data_CV, type="class")
+```
+
+
+#Results
+The function ConfusionMatrix is used to validate the accuracy of both methods. 
+```{r}
+    confusionMatrix(Pred_DT, Data_CV$classe)
+    confusionMatrix(Pred_RF, Data_CV$classe)
+```
+
+
